@@ -6,20 +6,23 @@ import { TechStack } from "@/components/landing/TechStack";
 import { CTA } from "@/components/landing/CTA";
 import { ToastDemo } from "@/components/ToastDemo";
 import { Footer } from "@/components/landing/Footer";
+import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 
 export default function LandingPage() {
   return (
-    <>
-      <Navbar />
-      <main>
-        <Hero />
-        <Features />
-        <HowItWorks />
-        <TechStack />
-        <ToastDemo />
-        <CTA />
-      </main>
-      <Footer />
-    </>
+    <ProtectedRoute mode="unauthenticated">
+      <>
+        <Navbar />
+        <main>
+          <Hero />
+          <Features />
+          <HowItWorks />
+          <TechStack />
+          <ToastDemo />
+          <CTA />
+        </main>
+        <Footer />
+      </>
+    </ProtectedRoute>
   );
 }
