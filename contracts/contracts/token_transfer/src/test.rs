@@ -1,10 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, Bytes, Env,
-};
+use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
 
 // ── Minimal mock token contract ───────────────────────────────────────────────
 
@@ -33,7 +30,9 @@ mod mock_token {
             let to_key = Key::Balance(to.clone());
             let from_bal: i128 = env.storage().persistent().get(&from_key).unwrap_or(0);
             assert!(from_bal >= amount, "insufficient balance");
-            env.storage().persistent().set(&from_key, &(from_bal - amount));
+            env.storage()
+                .persistent()
+                .set(&from_key, &(from_bal - amount));
             let to_bal: i128 = env.storage().persistent().get(&to_key).unwrap_or(0);
             env.storage().persistent().set(&to_key, &(to_bal + amount));
         }

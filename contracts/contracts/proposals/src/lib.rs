@@ -42,7 +42,9 @@ impl ProposalsContract {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::NextProposalId, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextProposalId, &0u64);
     }
 
     /// Create a new proposal that expires at `expires_at` (unix seconds).
