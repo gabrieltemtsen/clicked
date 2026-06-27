@@ -207,6 +207,8 @@ export const treasuryProposalStatusEnum = pgEnum('treasury_proposal_status', [
   'expired',
 ]);
 
+export const proposalVoteTypeEnum = pgEnum('proposal_vote_type', ['approve', 'reject']);
+
 export const treasuryProposals = pgTable(
   'treasury_proposals',
   {
@@ -219,6 +221,10 @@ export const treasuryProposals = pgTable(
     status: treasuryProposalStatusEnum('status').notNull().default('active'),
     approvalsCount: integer('approvals_count').notNull().default(0),
     rejectionsCount: integer('rejections_count').notNull().default(0),
+    recipient: text('recipient'),
+    amount: text('amount'),
+    token: text('token'),
+    threshold: integer('threshold').notNull().default(3),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -230,6 +236,28 @@ export const treasuryProposals = pgTable(
 export type TreasuryProposal = typeof treasuryProposals.$inferSelect;
 export type NewTreasuryProposal = typeof treasuryProposals.$inferInsert;
 
+export const proposalVotes = pgTable(
+  'proposal_votes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    treasuryProposalId: uuid('treasury_proposal_id')
+      .notNull()
+      .references(() => treasuryProposals.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    vote: proposalVoteTypeEnum('vote').notNull(),
+    signature: text('signature'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('proposal_votes_proposal_user_unique').on(table.treasuryProposalId, table.userId),
+  ],
+);
+
+export type ProposalVote = typeof proposalVotes.$inferSelect;
+export type NewProposalVote = typeof proposalVotes.$inferInsert;
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -238,6 +266,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   messages: many(messages),
   transfers: many(tokenTransfers),
   devices: many(devices),
+  proposalVotes: many(proposalVotes),
 }));
 
 export const walletsRelations = relations(wallets, ({ one }) => ({
@@ -290,6 +319,22 @@ export const signedPreKeysRelations = relations(signedPreKeys, ({ one }) => ({
 
 export const oneTimePreKeysRelations = relations(oneTimePreKeys, ({ one }) => ({
   device: one(devices, { fields: [oneTimePreKeys.deviceId], references: [devices.id] }),
+}));
+
+export const treasuryProposalsRelations = relations(treasuryProposals, ({ one, many }) => ({
+  conversation: one(conversations, {
+    fields: [treasuryProposals.conversationId],
+    references: [conversations.id],
+  }),
+  votes: many(proposalVotes),
+}));
+
+export const proposalVotesRelations = relations(proposalVotes, ({ one }) => ({
+  proposal: one(treasuryProposals, {
+    fields: [proposalVotes.treasuryProposalId],
+    references: [treasuryProposals.id],
+  }),
+  user: one(users, { fields: [proposalVotes.userId], references: [users.id] }),
 }));
 
 // ─── Types ────────────────────────────────────────────────────────────────────
