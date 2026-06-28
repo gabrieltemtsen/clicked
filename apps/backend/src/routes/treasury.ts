@@ -1,9 +1,13 @@
 import { Router } from 'express';
+import type { IRouter } from 'express';
 import { z } from 'zod';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
+import { and, desc, eq } from 'drizzle-orm';
+import { db } from '../db/index.js';
+import { conversationMembers, treasuryProposals } from '../db/schema.js';
 
-export const treasuryRouter = Router();
+export const treasuryRouter: IRouter = Router();
 
 treasuryRouter.use(requireAuth);
 
