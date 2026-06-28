@@ -238,28 +238,43 @@ export const treasuryProposalStatusEnum = pgEnum('treasury_proposal_status', [
   'expired',
 ]);
 
-export const treasuryProposals = pgTable(
-  'treasury_proposals',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    contractId: text('contract_id').notNull(),
-    proposalId: text('proposal_id').notNull(),
-    conversationId: uuid('conversation_id').references(() => conversations.id, {
-      onDelete: 'set null',
-    }),
-    status: treasuryProposalStatusEnum('status').notNull().default('active'),
-    approvalsCount: integer('approvals_count').notNull().default(0),
-    rejectionsCount: integer('rejections_count').notNull().default(0),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
-  },
-  (table) => [
-    uniqueIndex('treasury_proposals_contract_proposal_idx').on(table.contractId, table.proposalId),
-  ],
-);
+export const treasuryProposals = pgTable('treasury_proposals', {
+  id: serial('id').primaryKey(),
+  onChainId: integer('on_chain_id').notNull(),
+  conversationId: uuid('conversation_id')
+    .notNull()
+    .references(() => conversations.id, { onDelete: 'cascade' }),
+  proposerId: uuid('proposer_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  toAddress: text('to_address').notNull(),
+  tokenContract: text('token_contract').notNull(),
+  amount: text('amount').notNull(),
+  status: treasuryProposalStatusEnum('status').notNull().default('active'),
+  approvalsCount: integer('approvals_count').notNull().default(0),
+  rejectionsCount: integer('rejections_count').notNull().default(0),
+  threshold: integer('threshold').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
 
 export type TreasuryProposal = typeof treasuryProposals.$inferSelect;
 export type NewTreasuryProposal = typeof treasuryProposals.$inferInsert;
+
+export const pushSubscriptions = pgTable('push_subscriptions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  deviceId: uuid('device_id')
+    .notNull()
+    .references(() => userDevices.id, { onDelete: 'cascade' }),
+  endpoint: text('endpoint').notNull().unique(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export type PushSubscription = typeof pushSubscriptions.$inferSelect;
+export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
 
 // ─── Relations ────────────────────────────────────────────────────────────────
 
@@ -340,6 +355,22 @@ export const oneTimePreKeysRelations = relations(oneTimePreKeys, ({ one }) => ({
 export const userDevicesRelations = relations(userDevices, ({ one, many }) => ({
   user: one(users, { fields: [userDevices.userId], references: [users.id] }),
   messages: many(messages),
+  pushSubscriptions: many(pushSubscriptions),
+}));
+
+export const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
+  device: one(userDevices, { fields: [pushSubscriptions.deviceId], references: [userDevices.id] }),
+}));
+
+export const treasuryProposalsRelations = relations(treasuryProposals, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [treasuryProposals.conversationId],
+    references: [conversations.id],
+  }),
+  proposer: one(users, {
+    fields: [treasuryProposals.proposerId],
+    references: [users.id],
+  }),
 }));
 
 // ─── Types ────────────────────────────────────────────────────────────────────
