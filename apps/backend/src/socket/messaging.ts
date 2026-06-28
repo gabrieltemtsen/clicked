@@ -11,6 +11,23 @@ const PAGE_SIZE = 30;
 
 export function registerMessagingHandlers(io: Server, socket: AuthSocket): void {
   const userId = socket.auth!.userId;
+  const typingTimers = new Map<string, NodeJS.Timeout>();
+
+  socket.on('disconnect', () => {
+    for (const [timerKey, timer] of typingTimers.entries()) {
+      clearTimeout(timer);
+      const idx = timerKey.indexOf(':');
+      const cid = idx === -1 ? timerKey : timerKey.slice(0, idx);
+      const did = idx === -1 ? undefined : timerKey.slice(idx + 1);
+      const rp: { conversationId: string; userId: string; deviceId?: string } = {
+        conversationId: cid,
+        userId,
+      };
+      if (did) rp.deviceId = did;
+      socket.to(cid).emit('typing_stop', rp);
+    }
+    typingTimers.clear();
+  });
 
   // ── join_room ──────────────────────────────────────────────────────────────
   // Payload: { conversationId: string }
@@ -63,6 +80,21 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       .returning();
 
     io.to(conversationId).emit('new_message', message);
+
+    for (const [timerKey, timer] of typingTimers.entries()) {
+      if (timerKey === conversationId || timerKey.startsWith(`${conversationId}:`)) {
+        clearTimeout(timer);
+        typingTimers.delete(timerKey);
+        const idx = timerKey.indexOf(':');
+        const did = idx === -1 ? undefined : timerKey.slice(idx + 1);
+        const rp: { conversationId: string; userId: string; deviceId?: string } = {
+          conversationId,
+          userId,
+        };
+        if (did) rp.deviceId = did;
+        socket.to(conversationId).emit('typing_stop', rp);
+      }
+    }
 
     const members = await db.query.conversationMembers.findMany({
       where: eq(conversationMembers.conversationId, conversationId),
@@ -196,46 +228,108 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     },
   );
   // ── typing_start ────────────────────────────────────────────────────────────
-  // Payload: { conversationId: string }
-  // Broadcasts to the room excluding the sender. No DB write.
-  socket.on('typing_start', async (payload: { conversationId: string }) => {
-    const { conversationId } = payload;
+  // Payload: { conversationId: string; deviceId?: string }
+  // Broadcasts to the room excluding the sender via Pub/Sub. Zero DB write. Auto-expires.
+  socket.on(
+    'typing_start',
+    async (payload?: { conversationId?: string; deviceId?: string; [key: string]: unknown }) => {
+      if (!payload || typeof payload.conversationId !== 'string' || !payload.conversationId.trim()) {
+        socket.emit('error', { event: 'typing_start', message: 'Invalid conversationId' });
+        return;
+      }
 
-    const membership = await db.query.conversationMembers.findFirst({
-      where: and(
-        eq(conversationMembers.conversationId, conversationId),
-        eq(conversationMembers.userId, userId),
-      ),
-    });
+      const conversationId = payload.conversationId.trim();
 
-    if (!membership) {
-      socket.emit('error', { event: 'typing_start', message: 'Not a member of this conversation' });
-      return;
-    }
+      if (!socket.rooms?.has(conversationId)) {
+        const membership = await db.query.conversationMembers.findFirst({
+          where: and(
+            eq(conversationMembers.conversationId, conversationId),
+            eq(conversationMembers.userId, userId),
+          ),
+        });
 
-    socket.to(conversationId).emit('typing_start', { conversationId, userId });
-  });
+        if (!membership) {
+          socket.emit('error', {
+            event: 'typing_start',
+            message: 'Not a member of this conversation',
+          });
+          return;
+        }
+      }
+
+      const relayPayload: { conversationId: string; userId: string; deviceId?: string } = {
+        conversationId,
+        userId,
+      };
+      if (typeof payload.deviceId === 'string' && payload.deviceId.trim()) {
+        relayPayload.deviceId = payload.deviceId.trim();
+      }
+
+      const timerKey = relayPayload.deviceId ? `${conversationId}:${relayPayload.deviceId}` : conversationId;
+      const existingTimer = typingTimers.get(timerKey);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+      }
+
+      const timer = setTimeout(() => {
+        typingTimers.delete(timerKey);
+        socket.to(conversationId).emit('typing_stop', relayPayload);
+      }, 5000);
+
+      typingTimers.set(timerKey, timer);
+
+      socket.to(conversationId).emit('typing_start', relayPayload);
+    },
+  );
 
   // ── typing_stop ─────────────────────────────────────────────────────────────
-  // Payload: { conversationId: string }
-  // Broadcasts to the room excluding the sender. No DB write.
-  socket.on('typing_stop', async (payload: { conversationId: string }) => {
-    const { conversationId } = payload;
+  // Payload: { conversationId: string; deviceId?: string }
+  // Broadcasts to the room excluding the sender via Pub/Sub. Zero DB write.
+  socket.on(
+    'typing_stop',
+    async (payload?: { conversationId?: string; deviceId?: string; [key: string]: unknown }) => {
+      if (!payload || typeof payload.conversationId !== 'string' || !payload.conversationId.trim()) {
+        socket.emit('error', { event: 'typing_stop', message: 'Invalid conversationId' });
+        return;
+      }
 
-    const membership = await db.query.conversationMembers.findFirst({
-      where: and(
-        eq(conversationMembers.conversationId, conversationId),
-        eq(conversationMembers.userId, userId),
-      ),
-    });
+      const conversationId = payload.conversationId.trim();
 
-    if (!membership) {
-      socket.emit('error', { event: 'typing_stop', message: 'Not a member of this conversation' });
-      return;
-    }
+      if (!socket.rooms?.has(conversationId)) {
+        const membership = await db.query.conversationMembers.findFirst({
+          where: and(
+            eq(conversationMembers.conversationId, conversationId),
+            eq(conversationMembers.userId, userId),
+          ),
+        });
 
-    socket.to(conversationId).emit('typing_stop', { conversationId, userId });
-  });
+        if (!membership) {
+          socket.emit('error', {
+            event: 'typing_stop',
+            message: 'Not a member of this conversation',
+          });
+          return;
+        }
+      }
+
+      const relayPayload: { conversationId: string; userId: string; deviceId?: string } = {
+        conversationId,
+        userId,
+      };
+      if (typeof payload.deviceId === 'string' && payload.deviceId.trim()) {
+        relayPayload.deviceId = payload.deviceId.trim();
+      }
+
+      const timerKey = relayPayload.deviceId ? `${conversationId}:${relayPayload.deviceId}` : conversationId;
+      const existingTimer = typingTimers.get(timerKey);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        typingTimers.delete(timerKey);
+      }
+
+      socket.to(conversationId).emit('typing_stop', relayPayload);
+    },
+  );
 
   // ── ask_assistant ──────────────────────────────────────────────────────────
   // Payload: { conversationId: string; content: string }
