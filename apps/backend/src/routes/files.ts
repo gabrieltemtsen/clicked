@@ -4,16 +4,10 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { objectStore } from '../lib/objectStore.js';
 
 export const filesRouter: IRouter = Router();
 filesRouter.use(requireAuth);
-
-const s3 = new S3Client({
-  region: process.env['AWS_REGION'] || 'us-east-1',
-});
-const bucketName = process.env['AWS_BUCKET'] || 'clicked-files';
 
 filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
@@ -48,12 +42,8 @@ filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
   }
 
   try {
-    const command = new GetObjectCommand({
-      Bucket: bucketName,
-      Key: fileId,
-    });
     // Short-lived URL: 5 minutes
-    const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+    const presignedUrl = await objectStore.getDownloadUrl(fileId, 300);
     res.json({ url: presignedUrl });
   } catch {
     res.status(500).json({ error: 'Failed to generate download URL' });
