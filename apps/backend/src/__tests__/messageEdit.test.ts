@@ -42,6 +42,29 @@ vi.mock('../lib/conversationCache.js', () => ({
   invalidateConversationCaches: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../lib/redis.js', () => ({ redis: null }));
+
+vi.mock('../services/pushNotification.js', () => ({
+  dispatchOfflinePush: vi.fn().mockResolvedValue(undefined),
+  FILE_CONTENT_TYPES: new Set<string>(),
+}));
+
+vi.mock('../services/deliveryPipeline.js', () => ({
+  deliverMessage: vi.fn(
+    async (
+      io: { to: (r: string) => { emit: (e: string, d: unknown) => void } },
+      message: unknown,
+      conversationId: string,
+    ) => {
+      io.to(conversationId).emit('new_message', message);
+    },
+  ),
+}));
+
+vi.mock('../services/deviceDelivery.js', () => ({
+  publishToDevice: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('drizzle-orm', () => ({
   and: vi.fn((...args: unknown[]) => args),
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),

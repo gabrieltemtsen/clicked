@@ -33,6 +33,20 @@ vi.mock('@stellar/stellar-sdk', () => ({
   },
 }));
 
+vi.mock('../services/pushNotification.js', () => ({
+  dispatchOfflinePush: vi.fn().mockResolvedValue(undefined),
+  reenableExpiredBackoffs: vi.fn().mockResolvedValue(undefined),
+  FILE_CONTENT_TYPES: new Set<string>(),
+}));
+
+vi.mock('../services/deliveryPipeline.js', () => ({
+  deliverMessage: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../services/deviceDelivery.js', () => ({
+  publishToDevice: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ── Import app after mocks are registered ─────────────────────────────────
 
 const { app } = await import('../app.js');
@@ -48,7 +62,7 @@ function resetRateLimiters() {
 const WALLET = 'GABCDEFGHIJKLMNOPQRSTUVWXYZ012345678901234567890123456789AB';
 const SIGNATURE = 'aabbccdd';
 const NONCE = 'test-nonce-abc123';
-const IDENTITY_KEY = 'dGVzdC1pZGVudGl0eS1wdWJsaWMta2V5'; // base64 placeholder
+const IDENTITY_KEY = Buffer.alloc(44, 1).toString('base64'); // 44-byte SPKI placeholder
 
 function setupInsert(userId = 'new-user-id', deviceId = 'new-device-id') {
   // New-user flow inserts: users → wallets → devices (3 calls total).

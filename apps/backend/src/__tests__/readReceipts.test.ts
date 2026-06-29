@@ -25,8 +25,27 @@ vi.mock('../db/schema.js', () => ({
 vi.mock('drizzle-orm', () => ({
   and: vi.fn((...args: unknown[]) => args),
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
+  ne: vi.fn((col: unknown, val: unknown) => ({ col, val, op: 'ne' })),
+  isNull: vi.fn((col: unknown) => ({ col, op: 'isNull' })),
   lt: vi.fn(),
   desc: vi.fn(),
+  sql: vi.fn(),
+  inArray: vi.fn((col: unknown, vals: unknown) => ({ col, vals })),
+}));
+
+vi.mock('../lib/redis.js', () => ({ redis: null }));
+
+vi.mock('../services/pushNotification.js', () => ({
+  dispatchOfflinePush: vi.fn().mockResolvedValue(undefined),
+  FILE_CONTENT_TYPES: new Set<string>(),
+}));
+
+vi.mock('../services/deliveryPipeline.js', () => ({
+  deliverMessage: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../services/deviceDelivery.js', () => ({
+  publishToDevice: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ── Mock Socket helpers ────────────────────────────────────────────────────
