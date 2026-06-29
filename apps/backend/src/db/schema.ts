@@ -58,9 +58,14 @@ export const contentTypeEnum = pgEnum('content_type', [
 // Tracks S3 storage objects for file-type messages. Soft-deleted when all
 // referencing messages are retracted; hard-deleted by the background cleanup job.
 
+export const fileStatusEnum = pgEnum('file_status', ['pending', 'ready']);
+
 export const files = pgTable('files', {
   id: uuid('id').primaryKey().defaultRandom(),
   storageKey: text('storage_key').notNull().unique(),
+  status: fileStatusEnum('status').notNull().default('pending'),
+  size: integer('size'),
+  sha256: text('sha256'),
   deletedAt: timestamp('deleted_at'),
   hardDeletedAt: timestamp('hard_deleted_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),

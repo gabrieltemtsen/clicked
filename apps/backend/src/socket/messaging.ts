@@ -66,13 +66,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
   // ── send_message ───────────────────────────────────────────────────────────
   dispatcher.register('send_message', async (payload) => {
-    const { conversationId, messageId, content, contentType, ciphertext, envelopes } = payload as {
+    const { conversationId, messageId, content, contentType, ciphertext, envelopes, fileId } = payload as {
       conversationId: string;
       messageId?: string;
       content?: string;
       contentType?: string;
       ciphertext?: string;
       envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
+      fileId?: string;
     };
     const deviceId = socket.auth!.deviceId;
 
@@ -136,15 +137,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
-    let fileId: string | undefined;
     const resolvedContentType = contentType || 'text/plain';
-    if (FILE_CONTENT_TYPES.has(resolvedContentType)) {
-      const [fileRow] = await db
-        .insert(files)
-        .values({ storageKey: messageId })
-        .onConflictDoUpdate({ target: files.storageKey, set: { storageKey: messageId } })
-        .returning({ id: files.id });
-      fileId = fileRow?.id;
+    
+    if (fileId) {
+      const fileRecord = await db.query.files.findFirst({
+        where: eq(files.id, fileId),
+      });
+      if (!fileRecord || fileRecord.status !== 'ready') {
+        socket.emit('error', { event: 'send_message', message: 'File is not ready or does not exist' });
+        return;
+      }
     }
 
     const [message] = await db

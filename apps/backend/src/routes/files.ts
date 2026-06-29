@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { IRouter } from 'express';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { messages, conversationMembers } from '../db/schema.js';
+import { messages, conversationMembers, files } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -24,12 +24,21 @@ filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
     return;
   }
 
-  // Find the message that references this file
+  // Find a message that references this file
   const message = await db.query.messages.findFirst({
-    where: eq(messages.id, fileId),
+    where: eq(messages.fileId, fileId),
   });
 
   if (!message) {
+    res.status(404).json({ error: 'File not referenced by any message' });
+    return;
+  }
+
+  const file = await db.query.files.findFirst({
+    where: eq(files.id, fileId),
+  });
+
+  if (!file) {
     res.status(404).json({ error: 'File not found' });
     return;
   }
@@ -50,7 +59,7 @@ filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
   try {
     const command = new GetObjectCommand({
       Bucket: bucketName,
-      Key: fileId,
+      Key: file.storageKey,
     });
     // Short-lived URL: 5 minutes
     const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
