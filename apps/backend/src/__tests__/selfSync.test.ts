@@ -31,6 +31,13 @@ const mockValues = vi.fn(() => ({
 }));
 const mockInsert = vi.fn(() => ({ values: mockValues }));
 
+// db.select chain used by deliveryPipeline.ts inside deliverMessage.
+// First call: members query → non-empty so deliverMessage doesn't early-return.
+// Second call: activeDevices query → empty so deliverMessage emits new_message.
+const mockSelectWhere = vi.fn();
+const mockSelectFrom = vi.fn(() => ({ where: mockSelectWhere }));
+const mockSelect = vi.fn(() => ({ from: mockSelectFrom }));
+
 vi.mock('../db/index.js', () => ({
   db: {
     query: {
@@ -44,6 +51,7 @@ vi.mock('../db/index.js', () => ({
     insert: mockInsert,
     update: vi.fn(),
     delete: vi.fn(),
+    select: mockSelect,
   },
 }));
 
@@ -64,18 +72,6 @@ vi.mock('../lib/redis.js', () => ({ redis: null }));
 vi.mock('../services/pushNotification.js', () => ({
   dispatchOfflinePush: vi.fn().mockResolvedValue(undefined),
   FILE_CONTENT_TYPES: new Set<string>(),
-}));
-
-vi.mock('../services/deliveryPipeline.js', () => ({
-  deliverMessage: vi.fn(
-    async (
-      io: { to: (r: string) => { emit: (e: string, d: unknown) => void } },
-      message: unknown,
-      conversationId: string,
-    ) => {
-      io.to(conversationId).emit('new_message', message);
-    },
-  ),
 }));
 
 vi.mock('../services/deviceDelivery.js', () => ({
@@ -164,6 +160,15 @@ beforeEach(() => {
   // wipe their implementations and break the insert().values().returning() chain.
   mockInsert.mockClear();
   mockValues.mockClear();
+  mockSelect.mockClear();
+  mockSelectFrom.mockClear();
+  // deliverMessage (deliveryPipeline.ts) calls db.select twice:
+  //   1st: members query → must be non-empty so it doesn't early-return
+  //   2nd: activeDevices query → empty triggers io.to().emit('new_message')
+  mockSelectWhere
+    .mockReset()
+    .mockResolvedValueOnce([{ userId: USER_ID }])
+    .mockResolvedValue([]);
 });
 
 // ── send_message ──────────────────────────────────────────────────────────────
