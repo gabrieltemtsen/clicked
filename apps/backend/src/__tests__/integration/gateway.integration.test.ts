@@ -262,10 +262,21 @@ function mockInsertMessage(msg: {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ioredis internally rejects pending-command Promises when a connection closes.
+// Those rejections are not catchable on the quit() promise itself — they surface
+// as unhandled rejections from ioredis's event_handler.js.  Register a handler
+// that silences only this specific message so Vitest doesn't report it as an
+// error while still letting genuine unhandled rejections propagate.
+const suppressConnectionClosed = (err: unknown) => {
+  if (err instanceof Error && err.message === 'Connection is closed.') return;
+  throw err;
+};
+
 describe('Gateway integration — issue #215', () => {
   let redis: Redis;
 
   beforeAll(async () => {
+    process.on('unhandledRejection', suppressConnectionClosed);
     redis = new Redis(REDIS_URL, { lazyConnect: true });
     await redis.connect();
     redisRef.instance = redis;
@@ -273,6 +284,7 @@ describe('Gateway integration — issue #215', () => {
 
   afterAll(async () => {
     await redis.quit().catch(() => {});
+    process.off('unhandledRejection', suppressConnectionClosed);
   });
 
   beforeEach(async () => {
