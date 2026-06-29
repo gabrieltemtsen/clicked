@@ -189,6 +189,18 @@ describe('GET /conversations — Redis caching', () => {
   });
 });
 
+describe('GET /conversations/:id/search', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns 501 for E2EE environments', async () => {
+    const res = await request(makeApp()).get('/conversations/conv-1/search?q=hello');
+
+    expect(res.status).toBe(501);
+  });
+});
+
 describe('GET /conversations — isArchived filter', () => {
   beforeEach(() => {
     vi.clearAllMocks();

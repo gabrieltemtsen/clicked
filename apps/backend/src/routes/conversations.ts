@@ -483,6 +483,11 @@ conversationsRouter.get('/:id/messages', async (req: AuthRequest, res) => {
   res.json({ messages: page, nextCursor });
 });
 
+// GET /conversations/:id/search — disabled in E2EE environments (server cannot read ciphertext)
+conversationsRouter.get('/:id/search', (_req: AuthRequest, res) => {
+  res.status(501).json({ error: 'Full-text search is not available in E2EE environments' });
+});
+
 // PATCH /conversations/:id/settings — update muted/archived state for the authenticated user
 conversationsRouter.patch('/:id/settings', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
