@@ -16,18 +16,17 @@
 
 export interface MessagePayload {
   /** MIME-like content type token, e.g. "text", "image", "file", "system" */
-  contentType?: string;
+  contentType?: string | undefined;
   /** Base64-encoded ciphertext of the message body (optional for file types) */
-  ciphertext?: string;
+  ciphertext?: string | undefined;
   /** Per-recipient E2EE envelopes carrying the encrypted key */
-  envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
+  envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }> | undefined;
   /** UUID referencing the uploaded file (required for file/image/video/audio) */
-  fileId?: string;
+  fileId?: string | undefined;
 }
 
 export type MessagePayloadValidationResult =
-  | { ok: true }
-  | { ok: false; code: 400 | 403; message: string };
+  { ok: true } | { ok: false; code: 400 | 403; message: string };
 
 /** All content types clients are allowed to send */
 const ALLOWED_CONTENT_TYPES = new Set(['text', 'file', 'image', 'video', 'audio'] as const);

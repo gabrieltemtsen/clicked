@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { reconcileBoot, cleanupStaleSockets, setOffline } from '../services/presence.js';
+import {
+  cleanupStaleSockets,
+  reconcileBoot,
+  registerPresenceSocket,
+  setOffline,
+  unregisterPresenceSocket,
+} from '../services/presence.js';
 
 // ── DB mock ────────────────────────────────────────────────────────────────
 const { mockFindMany } = vi.hoisted(() => ({
@@ -27,7 +33,7 @@ vi.mock('drizzle-orm', () => ({
 
 // ── Redis & Socket mock ────────────────────────────────────────────────────
 
-describe('Presence Reconciliation & Gateway Boot (#...)', () => {
+describe('Presence Reconciliation & Gateway Boot (#221)', () => {
   let mockRedis: any;
   let mockIo: any;
   let mockSocketsJoin: any;
@@ -37,7 +43,7 @@ describe('Presence Reconciliation & Gateway Boot (#...)', () => {
     vi.clearAllMocks();
 
     mockSocketsJoin = vi.fn();
-    mockFetchSockets = vi.fn().mockResolvedValue([]);
+    mockFetchSockets = vi.fn().mockResolvedValue([{ id: 'socket-active' }]);
 
     mockIo = {
       in: vi.fn((sid: string) => ({
@@ -50,26 +56,32 @@ describe('Presence Reconciliation & Gateway Boot (#...)', () => {
       scan: vi.fn(),
       keys: vi.fn(),
       smembers: vi.fn(),
-      srem: vi.fn(),
-      scard: vi.fn(),
-      del: vi.fn(),
+      srem: vi.fn().mockResolvedValue(1),
+      sadd: vi.fn().mockResolvedValue(1),
+      scard: vi.fn().mockResolvedValue(1),
+      del: vi.fn().mockResolvedValue(1),
+      hset: vi.fn().mockResolvedValue(1),
+      hgetall: vi.fn().mockResolvedValue({ deviceId: 'device-1' }),
+      hdel: vi.fn().mockResolvedValue(1),
+      hlen: vi.fn().mockResolvedValue(1),
+      expire: vi.fn().mockResolvedValue(true),
     };
   });
 
   describe('reconcileBoot', () => {
     it('rebuilds room subscriptions from active Redis socket mappings on boot', async () => {
-      // redis.scan returns presence keys
+      // redis.scan returns user socket-mapping keys, not device presence hashes.
       mockRedis.scan
-        .mockResolvedValueOnce(['10', ['presence:user-1', 'presence:user-2']])
+        .mockResolvedValueOnce(['10', ['presence:sockets:user-1', 'presence:sockets:user-2']])
         .mockResolvedValueOnce(['0', []]);
 
       mockRedis.smembers.mockImplementation(async (key: string) => {
-        if (key === 'presence:user-1') return ['socket-1a', 'socket-1b'];
-        if (key === 'presence:user-2') return ['socket-2a'];
+        if (key === 'presence:sockets:user-1') return ['socket-1a', 'socket-1b'];
+        if (key === 'presence:sockets:user-2') return ['socket-2a'];
         return [];
       });
 
-      mockFindMany.mockImplementation(async ({ where }: any) => {
+      mockFindMany.mockImplementation(async ({ where }: { where: { val: string } }) => {
         if (where.val === 'user-1') {
           return [{ conversationId: 'room-alpha' }, { conversationId: 'room-beta' }];
         }
@@ -79,12 +91,11 @@ describe('Presence Reconciliation & Gateway Boot (#...)', () => {
         return [];
       });
 
-      await reconcileBoot(mockIo as any, mockRedis as any);
+      await reconcileBoot(mockIo as never, mockRedis as never);
 
       expect(mockRedis.scan).toHaveBeenCalledTimes(2);
       expect(mockFindMany).toHaveBeenCalledTimes(2);
 
-      // user-1 sockets joined room-alpha & room-beta
       expect(mockIo.in).toHaveBeenCalledWith('socket-1a');
       expect(mockIo.in).toHaveBeenCalledWith('socket-1b');
       expect(mockIo.in).toHaveBeenCalledWith('socket-2a');
@@ -95,70 +106,121 @@ describe('Presence Reconciliation & Gateway Boot (#...)', () => {
 
     it('falls back to redis.keys if redis.scan throws', async () => {
       mockRedis.scan.mockRejectedValue(new Error('scan not supported'));
-      mockRedis.keys.mockResolvedValue(['presence:user-3']);
+      mockRedis.keys.mockResolvedValue(['presence:sockets:user-3']);
       mockRedis.smembers.mockResolvedValue(['socket-3a']);
       mockFindMany.mockResolvedValue([{ conversationId: 'room-delta' }]);
 
-      await reconcileBoot(mockIo as any, mockRedis as any);
+      await reconcileBoot(mockIo as never, mockRedis as never);
 
-      expect(mockRedis.keys).toHaveBeenCalledWith('presence:*');
+      expect(mockRedis.keys).toHaveBeenCalledWith('presence:sockets:*');
       expect(mockSocketsJoin).toHaveBeenCalledWith('room-delta');
     });
   });
 
   describe('cleanupStaleSockets', () => {
-    it('removes stale socket IDs from Redis presence set and deletes empty sets', async () => {
+    it('removes stale socket IDs from Redis socket mappings and keeps active sockets', async () => {
       mockRedis.smembers.mockResolvedValue(['socket-dead', 'socket-alive']);
 
       mockFetchSockets.mockImplementation(async (sid: string) => {
-        if (sid === 'socket-alive') return [{ id: 'socket-alive' }]; // still connected
-        return []; // dead socket
+        if (sid === 'socket-alive') return [{ id: 'socket-alive' }];
+        return [];
+      });
+      mockRedis.hgetall.mockResolvedValue({ deviceId: 'device-1' });
+      mockRedis.scard.mockImplementation(async (key: string) => {
+        if (key === 'presence:sockets:user-1') return 1;
+        return 0;
       });
 
-      mockRedis.scard.mockResolvedValue(1);
+      await cleanupStaleSockets(mockIo as never, mockRedis as never, 'user-1');
 
-      await cleanupStaleSockets(mockIo as any, mockRedis as any, 'user-1');
-
-      expect(mockRedis.srem).toHaveBeenCalledWith('presence:user-1', 'socket-dead');
-      expect(mockRedis.srem).not.toHaveBeenCalledWith('presence:user-1', 'socket-alive');
-      expect(mockRedis.del).not.toHaveBeenCalled();
+      expect(mockRedis.srem).toHaveBeenCalledWith('presence:sockets:user-1', 'socket-dead');
+      expect(mockRedis.srem).toHaveBeenCalledWith(
+        'presence:device_sockets:user-1:device-1',
+        'socket-dead',
+      );
+      expect(mockRedis.srem).not.toHaveBeenCalledWith('presence:sockets:user-1', 'socket-alive');
+      expect(mockRedis.del).toHaveBeenCalledWith('presence:socket:socket-dead');
+      expect(mockRedis.del).not.toHaveBeenCalledWith('presence:sockets:user-1');
     });
 
-    it('deletes presence key if all sockets were stale and removed', async () => {
+    it('deletes socket mapping key if all sockets were stale and removed', async () => {
       mockRedis.smembers.mockResolvedValue(['socket-dead-1']);
-      mockFetchSockets.mockResolvedValue([]); // dead socket
+      mockFetchSockets.mockResolvedValue([]);
+      mockRedis.hgetall.mockResolvedValue({ deviceId: 'device-1' });
       mockRedis.scard.mockResolvedValue(0);
 
-      await cleanupStaleSockets(mockIo as any, mockRedis as any, 'user-2');
+      await cleanupStaleSockets(mockIo as never, mockRedis as never, 'user-2');
 
-      expect(mockRedis.srem).toHaveBeenCalledWith('presence:user-2', 'socket-dead-1');
-      expect(mockRedis.del).toHaveBeenCalledWith('presence:user-2');
+      expect(mockRedis.srem).toHaveBeenCalledWith('presence:sockets:user-2', 'socket-dead-1');
+      expect(mockRedis.del).toHaveBeenCalledWith('presence:sockets:user-2');
     });
 
     it('ignores activeSocketId if passed', async () => {
       mockRedis.smembers.mockResolvedValue(['socket-new']);
 
-      await cleanupStaleSockets(mockIo as any, mockRedis as any, 'user-3', 'socket-new');
+      await cleanupStaleSockets(mockIo as never, mockRedis as never, 'user-3', 'socket-new');
 
       expect(mockFetchSockets).not.toHaveBeenCalled();
       expect(mockRedis.srem).not.toHaveBeenCalled();
     });
   });
 
+  describe('socket mapping helpers', () => {
+    it('registers a socket without duplicating device-level presence entries', async () => {
+      await registerPresenceSocket(mockRedis as never, 'user-1', 'device-1', 'socket-1');
+
+      expect(mockRedis.sadd).toHaveBeenCalledWith('presence:sockets:user-1', 'socket-1');
+      expect(mockRedis.sadd).toHaveBeenCalledWith(
+        'presence:device_sockets:user-1:device-1',
+        'socket-1',
+      );
+      expect(mockRedis.hset).toHaveBeenCalledWith('presence:socket:socket-1', {
+        userId: 'user-1',
+        deviceId: 'device-1',
+      });
+    });
+
+    it('unregisters a socket and reports whether the device has no sockets left', async () => {
+      mockRedis.scard.mockImplementation(async (key: string) => {
+        if (key === 'presence:device_sockets:user-1:device-1') return 0;
+        return 1;
+      });
+
+      const deviceHasNoSockets = await unregisterPresenceSocket(
+        mockRedis as never,
+        'user-1',
+        'device-1',
+        'socket-1',
+      );
+
+      expect(mockRedis.srem).toHaveBeenCalledWith('presence:sockets:user-1', 'socket-1');
+      expect(mockRedis.srem).toHaveBeenCalledWith(
+        'presence:device_sockets:user-1:device-1',
+        'socket-1',
+      );
+      expect(mockRedis.del).toHaveBeenCalledWith('presence:socket:socket-1');
+      expect(deviceHasNoSockets).toBe(true);
+    });
+  });
+
   describe('setOffline', () => {
-    it('removes socket ID and returns true when no sockets remain', async () => {
-      mockRedis.scard.mockResolvedValue(0);
-      const offline = await setOffline(mockRedis as any, 'user-1', 'socket-1');
-      expect(mockRedis.srem).toHaveBeenCalledWith('presence:user-1', 'socket-1');
-      expect(mockRedis.del).toHaveBeenCalledWith('presence:user-1');
+    it('removes device ID and returns true when no devices remain', async () => {
+      mockRedis.hlen.mockResolvedValue(0);
+
+      const offline = await setOffline(mockRedis as never, 'user-1', 'device-1');
+
+      expect(mockRedis.hdel).toHaveBeenCalledWith('presence:user:user-1', 'device-1');
+      expect(mockRedis.del).toHaveBeenCalledWith('presence:user:user-1');
       expect(offline).toBe(true);
     });
 
-    it('returns false when surviving connections remain', async () => {
-      mockRedis.scard.mockResolvedValue(1);
-      const offline = await setOffline(mockRedis as any, 'user-1', 'socket-1');
-      expect(mockRedis.srem).toHaveBeenCalledWith('presence:user-1', 'socket-1');
-      expect(mockRedis.del).not.toHaveBeenCalled();
+    it('returns false when surviving devices remain', async () => {
+      mockRedis.hlen.mockResolvedValue(1);
+
+      const offline = await setOffline(mockRedis as never, 'user-1', 'device-1');
+
+      expect(mockRedis.hdel).toHaveBeenCalledWith('presence:user:user-1', 'device-1');
+      expect(mockRedis.del).not.toHaveBeenCalledWith('presence:user:user-1');
       expect(offline).toBe(false);
     });
   });
