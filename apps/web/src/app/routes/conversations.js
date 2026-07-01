@@ -3,13 +3,11 @@
  * Handles retrieval of active user chats sanitized of end-to-end encryption leaks.
  */
 
-const express = require('express');
-const router = express.Router();
+import express from 'express';
+import conversationService from '../services/conversationService.js';
+import cacheService from '../services/cacheService.js';
 
-// Mock imports matching standard patterns. Adjust these paths if your service 
-// directory is structured differently relative to this routes folder.
-const conversationService = require('../services/conversationService');
-const cacheService = require('../services/cacheService');
+const router = express.Router();
 
 /**
  * GET /api/conversations
@@ -72,4 +70,4 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-module.exports = router;
+export default router;

@@ -1,4 +1,4 @@
-const redisClient = require('../config/redis');
+import redisClient from '../config/redis.js';
 
 /**
  * Retrieves the cached conversation list for a specific user.
@@ -75,8 +75,11 @@ async function updateConversationCache(userId, conversationId, lastMessagePayloa
   await redisClient.set(cacheKey, JSON.stringify(list), 'EX', 86400);
 }
 
-module.exports = {
+const cacheService = {
   getConversationList,
   setConversationList,
   updateConversationCache
 };
+
+export { getConversationList, setConversationList, updateConversationCache };
+export default cacheService;
