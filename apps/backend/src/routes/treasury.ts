@@ -1,4 +1,4 @@
-import { Router, type Response } from 'express';
+import { Router, type Response, type IRouter } from 'express';
 import { z } from 'zod';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
@@ -6,7 +6,7 @@ import { treasuryProposals, proposalVotes } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 
-export const treasuryRouter = Router();
+export const treasuryRouter: IRouter = Router();
 
 treasuryRouter.use(requireAuth);
 
