@@ -45,7 +45,9 @@ vi.mock('drizzle-orm', () => ({
 }));
 
 vi.mock('../lib/storage.js', () => ({
-  generatePresignedPut: vi.fn(async (key: string) => `https://storage.example.com/${key}?X-Expires=999`),
+  generatePresignedPut: vi.fn(
+    async (key: string) => `https://storage.example.com/${key}?X-Expires=999`,
+  ),
   generateStorageKey: vi.fn(() => 'uploads/conv-123/abc123def456'),
 }));
 
@@ -76,7 +78,10 @@ const VALID_BODY = {
 };
 
 function mockMember() {
-  mockMemberFindFirst.mockResolvedValueOnce({ userId: 'user-abc', conversationId: VALID_BODY.conversationId });
+  mockMemberFindFirst.mockResolvedValueOnce({
+    userId: 'user-abc',
+    conversationId: VALID_BODY.conversationId,
+  });
 }
 
 function mockInsertReturning(fileId = 'file-uuid-001') {
@@ -117,22 +122,30 @@ describe('POST /uploads — issue #226', () => {
   });
 
   it('returns 400 when conversationId is missing', async () => {
-    const res = await request(app).post('/uploads').send({ size: 100, mimeType: 'image/jpeg', sha256: 'x' });
+    const res = await request(app)
+      .post('/uploads')
+      .send({ size: 100, mimeType: 'image/jpeg', sha256: 'x' });
     expect(res.status).toBe(400);
   });
 
   it('returns 400 when size is zero', async () => {
-    const res = await request(app).post('/uploads').send({ ...VALID_BODY, size: 0 });
+    const res = await request(app)
+      .post('/uploads')
+      .send({ ...VALID_BODY, size: 0 });
     expect(res.status).toBe(400);
   });
 
   it('returns 400 when size exceeds 100 MB', async () => {
-    const res = await request(app).post('/uploads').send({ ...VALID_BODY, size: 100 * 1024 * 1024 + 1 });
+    const res = await request(app)
+      .post('/uploads')
+      .send({ ...VALID_BODY, size: 100 * 1024 * 1024 + 1 });
     expect(res.status).toBe(400);
   });
 
   it('returns 415 for a disallowed MIME type', async () => {
-    const res = await request(app).post('/uploads').send({ ...VALID_BODY, mimeType: 'application/x-msdownload' });
+    const res = await request(app)
+      .post('/uploads')
+      .send({ ...VALID_BODY, mimeType: 'application/x-msdownload' });
     expect(res.status).toBe(415);
     expect(res.body).toHaveProperty('error', 'Unsupported media type');
   });
@@ -159,14 +172,18 @@ describe('POST /uploads — issue #226', () => {
   it('accepts image/png', async () => {
     mockMember();
     mockInsertReturning();
-    const res = await request(app).post('/uploads').send({ ...VALID_BODY, mimeType: 'image/png' });
+    const res = await request(app)
+      .post('/uploads')
+      .send({ ...VALID_BODY, mimeType: 'image/png' });
     expect(res.status).toBe(201);
   });
 
   it('accepts application/pdf', async () => {
     mockMember();
     mockInsertReturning();
-    const res = await request(app).post('/uploads').send({ ...VALID_BODY, mimeType: 'application/pdf' });
+    const res = await request(app)
+      .post('/uploads')
+      .send({ ...VALID_BODY, mimeType: 'application/pdf' });
     expect(res.status).toBe(201);
   });
 });
@@ -181,8 +198,15 @@ describe('POST /uploads/:fileId/confirm', () => {
   });
 
   it('returns 200 and status ready when file is pending and owned by caller', async () => {
-    mockFileFindFirst.mockResolvedValueOnce({ id: 'file-001', uploaderId: 'user-abc', status: 'pending' });
-    mockUpdate.mockReturnValueOnce({ set: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValueOnce(undefined) });
+    mockFileFindFirst.mockResolvedValueOnce({
+      id: 'file-001',
+      uploaderId: 'user-abc',
+      status: 'pending',
+    });
+    mockUpdate.mockReturnValueOnce({
+      set: vi.fn().mockReturnThis(),
+      where: vi.fn().mockResolvedValueOnce(undefined),
+    });
 
     const res = await request(app).post('/uploads/file-001/confirm');
     expect(res.status).toBe(200);
@@ -196,19 +220,31 @@ describe('POST /uploads/:fileId/confirm', () => {
   });
 
   it('returns 403 when caller is not the uploader', async () => {
-    mockFileFindFirst.mockResolvedValueOnce({ id: 'file-001', uploaderId: 'someone-else', status: 'pending' });
+    mockFileFindFirst.mockResolvedValueOnce({
+      id: 'file-001',
+      uploaderId: 'someone-else',
+      status: 'pending',
+    });
     const res = await request(app).post('/uploads/file-001/confirm');
     expect(res.status).toBe(403);
   });
 
   it('returns 409 when file is already ready', async () => {
-    mockFileFindFirst.mockResolvedValueOnce({ id: 'file-001', uploaderId: 'user-abc', status: 'ready' });
+    mockFileFindFirst.mockResolvedValueOnce({
+      id: 'file-001',
+      uploaderId: 'user-abc',
+      status: 'ready',
+    });
     const res = await request(app).post('/uploads/file-001/confirm');
     expect(res.status).toBe(409);
   });
 
   it('returns 409 when file is deleted', async () => {
-    mockFileFindFirst.mockResolvedValueOnce({ id: 'file-001', uploaderId: 'user-abc', status: 'deleted' });
+    mockFileFindFirst.mockResolvedValueOnce({
+      id: 'file-001',
+      uploaderId: 'user-abc',
+      status: 'deleted',
+    });
     const res = await request(app).post('/uploads/file-001/confirm');
     expect(res.status).toBe(409);
   });
@@ -229,7 +265,9 @@ describe('Thumbnail handling — issue #230', () => {
     const returningSpy = vi.fn().mockResolvedValueOnce([{ id: 'thumb-001' }]);
     mockInsert.mockReturnValueOnce({ values: valuesSpy, returning: returningSpy });
 
-    const res = await request(app).post('/uploads').send({ ...VALID_BODY, mimeType: 'image/jpeg', isThumbnail: true });
+    const res = await request(app)
+      .post('/uploads')
+      .send({ ...VALID_BODY, mimeType: 'image/jpeg', isThumbnail: true });
     expect(res.status).toBe(201);
     const inserted = valuesSpy.mock.calls[0][0] as Record<string, unknown>;
     expect(inserted.isThumbnail).toBe(true);
@@ -238,7 +276,10 @@ describe('Thumbnail handling — issue #230', () => {
   it('isThumbnail defaults to false when not provided', async () => {
     mockMember();
     const valuesSpy = vi.fn().mockReturnThis();
-    mockInsert.mockReturnValueOnce({ values: valuesSpy, returning: vi.fn().mockResolvedValueOnce([{ id: 'f-001' }]) });
+    mockInsert.mockReturnValueOnce({
+      values: valuesSpy,
+      returning: vi.fn().mockResolvedValueOnce([{ id: 'f-001' }]),
+    });
 
     await request(app).post('/uploads').send(VALID_BODY);
     const inserted = valuesSpy.mock.calls[0][0] as Record<string, unknown>;
@@ -270,9 +311,14 @@ describe('Thumbnail handling — issue #230', () => {
   it('thumbnail upload returns its own fileId for referencing in message payload', async () => {
     mockMember();
     const valuesSpy = vi.fn().mockReturnThis();
-    mockInsert.mockReturnValueOnce({ values: valuesSpy, returning: vi.fn().mockResolvedValueOnce([{ id: 'thumb-xyz' }]) });
+    mockInsert.mockReturnValueOnce({
+      values: valuesSpy,
+      returning: vi.fn().mockResolvedValueOnce([{ id: 'thumb-xyz' }]),
+    });
 
-    const res = await request(app).post('/uploads').send({ ...VALID_BODY, isThumbnail: true });
+    const res = await request(app)
+      .post('/uploads')
+      .send({ ...VALID_BODY, isThumbnail: true });
     expect(res.body.fileId).toBe('thumb-xyz');
   });
 });

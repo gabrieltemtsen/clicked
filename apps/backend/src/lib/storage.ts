@@ -4,10 +4,7 @@ const PRESIGNED_TTL_SECONDS = 900; // 15 minutes
 
 // In production this would call S3/GCS SDK to generate a real presigned URL.
 // The indirection keeps the route logic testable without cloud credentials.
-export async function generatePresignedPut(
-  storageKey: string,
-  _mimeType: string,
-): Promise<string> {
+export async function generatePresignedPut(storageKey: string, _mimeType: string): Promise<string> {
   const base = process.env['STORAGE_ENDPOINT'] ?? 'https://storage.example.com';
   const expires = Math.floor(Date.now() / 1000) + PRESIGNED_TTL_SECONDS;
   return `${base}/${storageKey}?X-Expires=${expires}`;

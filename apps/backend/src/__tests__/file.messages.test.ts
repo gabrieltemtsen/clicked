@@ -103,12 +103,14 @@ const FILE_ID = 'file-abc';
 const ENVELOPE_CIPHERTEXT =
   'encrypted:{"fileId":"file-abc","fileName":"photo.jpg","mimeType":"image/jpeg","size":204800,"fileKey":"SUPER_SECRET_KEY_NEVER_STORED"}';
 
-function readyFile(overrides: Partial<{
-  id: string;
-  uploaderId: string;
-  conversationId: string;
-  status: string;
-}> = {}) {
+function readyFile(
+  overrides: Partial<{
+    id: string;
+    uploaderId: string;
+    conversationId: string;
+    status: string;
+  }> = {},
+) {
   return {
     id: FILE_ID,
     uploaderId: SENDER_ID,
@@ -201,13 +203,20 @@ describe('send_file_message socket event', () => {
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
-      expect.objectContaining({ event: 'send_file_message', message: expect.stringContaining('member') }),
+      expect.objectContaining({
+        event: 'send_file_message',
+        message: expect.stringContaining('member'),
+      }),
     );
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it('rejects when the referenced file does not exist', async () => {
-    mockMemberFindFirst.mockResolvedValueOnce({ id: 'm1', userId: SENDER_ID, conversationId: CONVERSATION_ID });
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'm1',
+      userId: SENDER_ID,
+      conversationId: CONVERSATION_ID,
+    });
     mockFileFindFirst.mockResolvedValueOnce(undefined); // file missing
 
     const socket = makeSocket(SENDER_ID);
@@ -228,13 +237,20 @@ describe('send_file_message socket event', () => {
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
-      expect.objectContaining({ event: 'send_file_message', message: expect.stringContaining('not found') }),
+      expect.objectContaining({
+        event: 'send_file_message',
+        message: expect.stringContaining('not found'),
+      }),
     );
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it('rejects when the file status is pending (not ready)', async () => {
-    mockMemberFindFirst.mockResolvedValueOnce({ id: 'm1', userId: SENDER_ID, conversationId: CONVERSATION_ID });
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'm1',
+      userId: SENDER_ID,
+      conversationId: CONVERSATION_ID,
+    });
     mockFileFindFirst.mockResolvedValueOnce(readyFile({ status: 'pending' }));
 
     const socket = makeSocket(SENDER_ID);
@@ -255,13 +271,20 @@ describe('send_file_message socket event', () => {
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
-      expect.objectContaining({ event: 'send_file_message', message: expect.stringContaining('not ready') }),
+      expect.objectContaining({
+        event: 'send_file_message',
+        message: expect.stringContaining('not ready'),
+      }),
     );
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it('rejects when the file status is deleted', async () => {
-    mockMemberFindFirst.mockResolvedValueOnce({ id: 'm1', userId: SENDER_ID, conversationId: CONVERSATION_ID });
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'm1',
+      userId: SENDER_ID,
+      conversationId: CONVERSATION_ID,
+    });
     mockFileFindFirst.mockResolvedValueOnce(readyFile({ status: 'deleted' }));
 
     const socket = makeSocket(SENDER_ID);
@@ -282,13 +305,20 @@ describe('send_file_message socket event', () => {
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
-      expect.objectContaining({ event: 'send_file_message', message: expect.stringContaining('not ready') }),
+      expect.objectContaining({
+        event: 'send_file_message',
+        message: expect.stringContaining('not ready'),
+      }),
     );
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it('rejects when the file belongs to a different conversation', async () => {
-    mockMemberFindFirst.mockResolvedValueOnce({ id: 'm1', userId: SENDER_ID, conversationId: CONVERSATION_ID });
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'm1',
+      userId: SENDER_ID,
+      conversationId: CONVERSATION_ID,
+    });
     mockFileFindFirst.mockResolvedValueOnce(readyFile({ conversationId: 'conv-other' }));
 
     const socket = makeSocket(SENDER_ID);
@@ -318,7 +348,11 @@ describe('send_file_message socket event', () => {
   });
 
   it('rejects when a different user tries to reference a file they did not upload', async () => {
-    mockMemberFindFirst.mockResolvedValueOnce({ id: 'm1', userId: 'other-user', conversationId: CONVERSATION_ID });
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'm1',
+      userId: 'other-user',
+      conversationId: CONVERSATION_ID,
+    });
     mockFileFindFirst.mockResolvedValueOnce(readyFile({ uploaderId: SENDER_ID }));
 
     const socket = makeSocket('other-user');
@@ -348,7 +382,11 @@ describe('send_file_message socket event', () => {
   });
 
   it('rejects when content (envelope ciphertext) is empty', async () => {
-    mockMemberFindFirst.mockResolvedValueOnce({ id: 'm1', userId: SENDER_ID, conversationId: CONVERSATION_ID });
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'm1',
+      userId: SENDER_ID,
+      conversationId: CONVERSATION_ID,
+    });
 
     const socket = makeSocket(SENDER_ID);
     const io = makeIo();
@@ -521,9 +559,7 @@ describe('send_file_message socket event', () => {
       });
 
       expect(mockInsert).toHaveBeenCalled();
-      expect(valuesFn).toHaveBeenCalledWith(
-        expect.objectContaining({ contentType }),
-      );
+      expect(valuesFn).toHaveBeenCalledWith(expect.objectContaining({ contentType }));
     }
   });
 });
