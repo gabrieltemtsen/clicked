@@ -4,7 +4,7 @@ import type { AuthSocket } from '../middleware/socketAuth.js';
 import { db } from '../db/index.js';
 import { devices, userDevices } from '../db/schema.js';
 import { eq, and, isNull } from 'drizzle-orm';
-import { refreshPresence, markDeviceOffline } from './presence.js';
+import { refreshPresence, markDeviceOffline, refreshPresenceSocket, unregisterPresenceSocket } from './presence.js';
 
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 const LAST_SEEN_THROTTLE_MS = 30_000;
@@ -26,17 +26,29 @@ export function startHeartbeatTimer(
       timers.delete(socket.id);
       console.log(`Heartbeat timeout for device ${deviceId} (user ${userId})`);
 
+      let fullyOffline = true;
       if (redis) {
-        await markDeviceOffline(redis, userId, deviceId);
+        const deviceHasNoSockets = await unregisterPresenceSocket(
+          redis,
+          userId,
+          deviceId,
+          socket.id,
+        );
+        fullyOffline = deviceHasNoSockets
+          ? await markDeviceOffline(redis, userId, deviceId)
+          : false;
       }
 
-      if (socket.connected) {
+      if (socket.connected && fullyOffline) {
         for (const room of socket.rooms) {
           if (room !== socket.id) {
             io.to(room).volatile.emit('user_offline', { userId });
             io.to(room).volatile.emit('presence_update', { userId, online: false });
           }
         }
+      }
+
+      if (socket.connected) {
         socket.disconnect(true);
       }
     }, HEARTBEAT_TIMEOUT_MS);
@@ -51,6 +63,7 @@ export function startHeartbeatTimer(
 
     if (redis) {
       await refreshPresence(redis, userId, deviceId);
+      await refreshPresenceSocket(redis, userId, deviceId, socket.id);
     }
 
     const now = Date.now();

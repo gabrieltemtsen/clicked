@@ -52,6 +52,7 @@
     "@types/morgan": "^1.9.10",
     "@types/node": "^20.19.37",
     "@types/supertest": "^7.2.0",
+    "@types/web-push": "^3.6.4",
     "@vitest/coverage-v8": "^4.1.6",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.39.4",
