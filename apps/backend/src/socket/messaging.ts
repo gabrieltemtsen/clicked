@@ -184,22 +184,63 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       fileId = fileRow?.id ?? payloadFileId;
     }
 
-    const [message] = await db
-      .insert(messages)
-      .values({
-        id: messageId,
-        conversationId,
-        senderId: userId,
-        senderDeviceId: deviceId,
-        contentType: resolvedContentType,
-        ciphertext: effectiveCiphertext,
-        fileId: fileId ?? null,
-      })
-      .returning();
-
+    let message;
     let recipientDeviceIds: string[] = [];
+    try {
+      message = await db.transaction(async (tx) => {
+        const [insertedMessage] = await tx
+          .insert(messages)
+          .values({
+            id: messageId,
+            conversationId,
+            senderId: userId,
+            senderDeviceId: deviceId,
+            contentType: resolvedContentType,
+            ciphertext: effectiveCiphertext,
+            fileId: fileId ?? null,
+          })
+          .returning();
 
-    if (envelopes && envelopes.length > 0) {
+        if (envelopes && envelopes.length > 0) {
+          const deviceIds = envelopes.map((e) => e.recipientDeviceId);
+          const devicesList = await tx.query.userDevices.findMany({
+            where: inArray(userDevices.id, deviceIds),
+            columns: { id: true, userId: true },
+          });
+          const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
+
+          const validEnvelopes = envelopes
+            .filter((env) => deviceToUser.has(env.recipientDeviceId))
+            .map((env) => ({
+              messageId,
+              recipientDeviceId: env.recipientDeviceId,
+              recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
+              ciphertext: env.ciphertext,
+            }));
+
+          if (validEnvelopes.length > 0) {
+            await tx.insert(messageEnvelopes).values(validEnvelopes);
+            recipientDeviceIds = validEnvelopes.map((e) => e.recipientDeviceId);
+          }
+        }
+
+        return insertedMessage;
+      });
+    } catch (error) {
+      console.error('Transaction failed for message insert:', error);
+      socket.emit('error', { event: 'send_message', message: 'Failed to persist message' });
+      return;
+    }
+
+    if (!message) {
+      socket.emit('error', { event: 'send_message', message: 'Failed to persist message' });
+      return;
+    }
+
+    socket.emit('message_ack', { messageId, sequenceNumber: message.sequenceNumber });
+
+    // Publish to Redis after transaction commit
+    if (redis && envelopes && envelopes.length > 0) {
       const deviceIds = envelopes.map((e) => e.recipientDeviceId);
       const devicesList = await db.query.userDevices.findMany({
         where: inArray(userDevices.id, deviceIds),
@@ -216,30 +257,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           ciphertext: env.ciphertext,
         }));
 
-      if (validEnvelopes.length > 0) {
-        await db.insert(messageEnvelopes).values(validEnvelopes);
-
-        if (redis && message) {
-          for (const env of validEnvelopes) {
-            publishToDevice(redis, env.recipientDeviceId, {
-              messageId: message.id,
-              conversationId,
-              ciphertext: env.ciphertext,
-              sequenceNumber: message.sequenceNumber,
-            }).catch(() => {});
-          }
-        }
-
-        recipientDeviceIds = validEnvelopes.map((e) => e.recipientDeviceId);
+      for (const env of validEnvelopes) {
+        publishToDevice(redis, env.recipientDeviceId, {
+          messageId: message.id,
+          conversationId,
+          ciphertext: env.ciphertext,
+          sequenceNumber: message.sequenceNumber,
+        }).catch(() => {});
       }
     }
-
-    if (!message) {
-      socket.emit('error', { event: 'send_message', message: 'Failed to persist message' });
-      return;
-    }
-
-    socket.emit('message_ack', { messageId, sequenceNumber: message.sequenceNumber });
 
     await deliverMessage(io, message, conversationId);
 
@@ -330,59 +356,54 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
-    // Enforce full sibling-device coverage (#188).
-    const siblingIds = await fetchSiblingDeviceIds(userId, deviceId);
-    if (siblingIds.length > 0) {
-      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
-      const missing = siblingIds.filter((id) => !providedIds.has(id));
-      if (missing.length > 0) {
-        socket.emit('error', {
-          event: 'device_set_mismatch',
-          message: `Missing envelopes for ${missing.length} sibling device(s)`,
-          missingDeviceIds: missing,
-        });
-        return;
-      }
-    }
-
-    const [message] = await db
-      .insert(messages)
-      .values({
-        id: messageId,
-        conversationId,
-        senderId: userId,
-        senderDeviceId: deviceId,
-        contentType: contentType || original.contentType,
-        ciphertext: ciphertext || null,
-        editsMessageId: rootMessageId,
-      })
-      .returning();
-
+    let message;
     let recipientDeviceIds: string[] = [];
+    try {
+      message = await db.transaction(async (tx) => {
+        const [insertedMessage] = await tx
+          .insert(messages)
+          .values({
+            id: messageId,
+            conversationId,
+            senderId: userId,
+            senderDeviceId: deviceId,
+            contentType: contentType || original.contentType,
+            ciphertext: ciphertext || null,
+            editsMessageId: rootMessageId,
+          })
+          .returning();
 
-    if (envelopes && envelopes.length > 0) {
-      const deviceIds = envelopes.map((e) => e.recipientDeviceId);
+        if (envelopes && envelopes.length > 0) {
+          const deviceIds = envelopes.map((e) => e.recipientDeviceId);
 
-      const devicesList = await db.query.userDevices.findMany({
-        where: inArray(userDevices.id, deviceIds),
-        columns: { id: true, userId: true },
+          const devicesList = await tx.query.userDevices.findMany({
+            where: inArray(userDevices.id, deviceIds),
+            columns: { id: true, userId: true },
+          });
+
+          const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
+
+          const validEnvelopes = envelopes
+            .filter((env) => deviceToUser.has(env.recipientDeviceId))
+            .map((env) => ({
+              messageId,
+              recipientDeviceId: env.recipientDeviceId,
+              recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
+              ciphertext: env.ciphertext,
+            }));
+
+          if (validEnvelopes.length > 0) {
+            await tx.insert(messageEnvelopes).values(validEnvelopes);
+            recipientDeviceIds = validEnvelopes.map((e) => e.recipientDeviceId);
+          }
+        }
+
+        return insertedMessage;
       });
-
-      const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
-
-      const validEnvelopes = envelopes
-        .filter((env) => deviceToUser.has(env.recipientDeviceId))
-        .map((env) => ({
-          messageId,
-          recipientDeviceId: env.recipientDeviceId,
-          recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
-          ciphertext: env.ciphertext,
-        }));
-
-      if (validEnvelopes.length > 0) {
-        await db.insert(messageEnvelopes).values(validEnvelopes);
-        recipientDeviceIds = validEnvelopes.map((e) => e.recipientDeviceId);
-      }
+    } catch (error) {
+      console.error('Transaction failed for message edit:', error);
+      socket.emit('error', { event: 'edit_message', message: 'Failed to persist message edit' });
+      return;
     }
 
     if (message) {
@@ -495,18 +516,30 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         return;
       }
 
-      const [message] = await db
-        .insert(messages)
-        .values({
-          conversationId,
-          senderId: userId,
-          content: content.trim(),
-          contentType,
-          fileId,
-        })
-        .returning();
+      let message;
+      try {
+        message = await db.transaction(async (tx) => {
+          const [insertedMessage] = await tx
+            .insert(messages)
+            .values({
+              conversationId,
+              senderId: userId,
+              ciphertext: content.trim(),
+              contentType,
+              fileId,
+            })
+            .returning();
 
-      io.to(conversationId).emit('new_message', message);
+          return insertedMessage;
+        });
+      } catch (error) {
+        console.error('Transaction failed for file message:', error);
+        socket.emit('error', { event: 'send_file_message', message: 'Failed to persist file message' });
+        return;
+      }
+
+      if (message) {
+        io.to(conversationId).emit('new_message', message);
 
       // Emit a file_message event for file-type content so recipients
       // know to fetch file bytes via GET /files/:id over HTTP.
