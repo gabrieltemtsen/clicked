@@ -9,6 +9,7 @@ import {
   integer,
   serial,
   uniqueIndex,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
@@ -68,6 +69,33 @@ export const conversationMembers = pgTable('conversation_members', {
   joinedAt: timestamp('joined_at').notNull().defaultNow(),
 });
 
+// ─── Uploaded files (#228) ───────────────────────────────────────────────────
+//
+// Tracks files that clients have uploaded to object storage. A file moves
+// through: pending → ready (server-confirmed the bytes arrived) → deleted.
+// Only `ready` files may be referenced in file messages. The `fileKey`
+// (symmetric encryption key) lives exclusively inside the E2EE envelope
+// ciphertext — it is NEVER stored here.
+
+export const fileStatusEnum = pgEnum('file_status', ['pending', 'ready', 'deleted']);
+
+export const files = pgTable('files', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  uploaderId: uuid('uploader_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  conversationId: uuid('conversation_id')
+    .notNull()
+    .references(() => conversations.id, { onDelete: 'cascade' }),
+  status: fileStatusEnum('status').notNull().default('pending'),
+  size: integer('size').notNull(),
+  mimeType: text('mime_type').notNull(),
+  sha256: text('sha256').notNull(),
+  storageKey: text('storage_key').notNull(),
+  isThumbnail: boolean('is_thumbnail').notNull().default(false),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
 export const messages = pgTable('messages', {
   id: uuid('id').primaryKey().defaultRandom(),
   conversationId: uuid('conversation_id')
@@ -82,6 +110,10 @@ export const messages = pgTable('messages', {
   contentType: text('content_type').notNull().default('text/plain'),
   sequenceNumber: serial('sequence_number'),
   ciphertext: text('ciphertext'),
+  fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
+  editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
+    onDelete: 'set null',
+  }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   deletedAt: timestamp('deleted_at'),
 });
@@ -117,6 +149,8 @@ export const messageEnvelopes = pgTable(
 // signature validation.  `isRevoked` lets the server reject stale devices
 // without deleting the row (preserving audit history).
 
+export const devicePlatformEnum = pgEnum('device_platform', ['web', 'ios', 'android']);
+
 export const devices = pgTable(
   'devices',
   {
@@ -126,6 +160,11 @@ export const devices = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     // Base64-encoded Ed25519 public key for this device.
     identityPublicKey: text('identity_public_key').notNull(),
+    // X3DH/Signal registration id published in the prekey bundle (#305).
+    registrationId: integer('registration_id'),
+    deviceName: text('device_name'),
+    platform: devicePlatformEnum('platform'),
+    lastSeenAt: timestamp('last_seen_at'),
     isRevoked: boolean('is_revoked').notNull().default(false),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -199,8 +238,6 @@ export const tokenTransfers = pgTable('token_transfers', {
 // device upserts instead of duplicating, and the partial index keeps lookups of
 // a user's *active* devices fast.
 
-export const devicePlatformEnum = pgEnum('device_platform', ['web', 'ios', 'android']);
-
 export const userDevices = pgTable(
   'user_devices',
   {
@@ -238,6 +275,8 @@ export const treasuryProposalStatusEnum = pgEnum('treasury_proposal_status', [
   'expired',
 ]);
 
+export const proposalVoteTypeEnum = pgEnum('proposal_vote_type', ['approve', 'reject']);
+
 export const treasuryProposals = pgTable(
   'treasury_proposals',
   {
@@ -250,6 +289,10 @@ export const treasuryProposals = pgTable(
     status: treasuryProposalStatusEnum('status').notNull().default('active'),
     approvalsCount: integer('approvals_count').notNull().default(0),
     rejectionsCount: integer('rejections_count').notNull().default(0),
+    recipient: text('recipient'),
+    amount: text('amount'),
+    token: text('token'),
+    threshold: integer('threshold').notNull().default(3),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -261,6 +304,43 @@ export const treasuryProposals = pgTable(
 export type TreasuryProposal = typeof treasuryProposals.$inferSelect;
 export type NewTreasuryProposal = typeof treasuryProposals.$inferInsert;
 
+export const proposalVotes = pgTable(
+  'proposal_votes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    treasuryProposalId: uuid('treasury_proposal_id')
+      .notNull()
+      .references(() => treasuryProposals.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    vote: proposalVoteTypeEnum('vote').notNull(),
+    signature: text('signature'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('proposal_votes_proposal_user_unique').on(table.treasuryProposalId, table.userId),
+  ],
+);
+
+export type ProposalVote = typeof proposalVotes.$inferSelect;
+export type NewProposalVote = typeof proposalVotes.$inferInsert;
+export const pushSubscriptions = pgTable('push_subscriptions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  deviceId: uuid('device_id')
+    .notNull()
+    .references(() => userDevices.id, { onDelete: 'cascade' }),
+  endpoint: text('endpoint').notNull().unique(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  lastUsedAt: timestamp('last_used_at'),
+  disabledAt: timestamp('disabled_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export type PushSubscription = typeof pushSubscriptions.$inferSelect;
+export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -269,6 +349,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   messages: many(messages),
   transfers: many(tokenTransfers),
   devices: many(devices),
+  proposalVotes: many(proposalVotes),
 }));
 
 export const walletsRelations = relations(wallets, ({ one }) => ({
@@ -280,6 +361,16 @@ export const conversationsRelations = relations(conversations, ({ many }) => ({
   messages: many(messages),
   transfers: many(tokenTransfers),
   treasuryProposals: many(treasuryProposals),
+  files: many(files),
+}));
+
+export const filesRelations = relations(files, ({ one, many }) => ({
+  uploader: one(users, { fields: [files.uploaderId], references: [users.id] }),
+  conversation: one(conversations, {
+    fields: [files.conversationId],
+    references: [conversations.id],
+  }),
+  messages: many(messages),
 }));
 
 export const conversationMembersRelations = relations(conversationMembers, ({ one }) => ({
@@ -300,7 +391,14 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
     fields: [messages.senderDeviceId],
     references: [userDevices.id],
   }),
+  file: one(files, { fields: [messages.fileId], references: [files.id] }),
   envelopes: many(messageEnvelopes),
+  editsMessage: one(messages, {
+    fields: [messages.editsMessageId],
+    references: [messages.id],
+    relationName: 'message_edits',
+  }),
+  edits: many(messages, { relationName: 'message_edits' }),
 }));
 
 export const messageEnvelopesRelations = relations(messageEnvelopes, ({ one }) => ({
@@ -340,6 +438,27 @@ export const oneTimePreKeysRelations = relations(oneTimePreKeys, ({ one }) => ({
 export const userDevicesRelations = relations(userDevices, ({ one, many }) => ({
   user: one(users, { fields: [userDevices.userId], references: [users.id] }),
   messages: many(messages),
+  pushSubscriptions: many(pushSubscriptions),
+}));
+
+export const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
+  device: one(userDevices, { fields: [pushSubscriptions.deviceId], references: [userDevices.id] }),
+}));
+
+export const treasuryProposalsRelations = relations(treasuryProposals, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [treasuryProposals.conversationId],
+    references: [conversations.id],
+  }),
+  votes: many(proposalVotes),
+}));
+
+export const proposalVotesRelations = relations(proposalVotes, ({ one }) => ({
+  proposal: one(treasuryProposals, {
+    fields: [proposalVotes.treasuryProposalId],
+    references: [treasuryProposals.id],
+  }),
+  user: one(users, { fields: [proposalVotes.userId], references: [users.id] }),
 }));
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -353,6 +472,8 @@ export type NewConversation = typeof conversations.$inferInsert;
 export type ConversationMember = typeof conversationMembers.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
+export type File = typeof files.$inferSelect;
+export type NewFile = typeof files.$inferInsert;
 export type MessageEnvelope = typeof messageEnvelopes.$inferSelect;
 export type NewMessageEnvelope = typeof messageEnvelopes.$inferInsert;
 export type TokenTransfer = typeof tokenTransfers.$inferSelect;
