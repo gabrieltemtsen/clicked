@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { IRouter } from 'express';
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { conversationMembers, messages, messageEnvelopes, userDevices } from '../db/schema.js';
+import { conversationMembers, messages, messageEnvelopes, userDevices, files } from '../db/schema.js';
 import { softDeleteFile } from '../services/fileCleanup.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';

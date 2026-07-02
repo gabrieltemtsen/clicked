@@ -1,5 +1,6 @@
 import type { Server } from 'socket.io';
-import { and, eq, lt, desc, sql, inArray } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { and, eq, lt, desc, sql, inArray, isNull, ne } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import {
@@ -14,6 +15,7 @@ import type { AuthSocket } from '../middleware/socketAuth.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { serializeMessage } from '../lib/messages.js';
 import { redis } from '../lib/redis.js';
+import { sendPushForMessage } from '../services/push.js';
 import { validateMessagePayload } from '../lib/validateMessagePayload.js';
 import { dispatchOfflinePush, FILE_CONTENT_TYPES } from '../services/pushNotification.js';
 import { deliverMessage } from '../services/deliveryPipeline.js';
@@ -22,6 +24,24 @@ import { publishToDevice } from '../services/deviceDelivery.js';
 import { EventDispatcher } from './dispatcher.js';
 
 const PAGE_SIZE = 30;
+
+/**
+ * Returns the UUIDs of all active (non-revoked) user_devices that belong to
+ * `userId` but are NOT the sending device (`senderDeviceId`). These are the
+ * "sibling" devices that must each receive their own envelope so they can
+ * decrypt the message locally. Issue #188.
+ */
+async function fetchSiblingDeviceIds(userId: string, senderDeviceId: string): Promise<string[]> {
+  const siblings = await db.query.userDevices.findMany({
+    where: and(
+      eq(userDevices.userId, userId),
+      ne(userDevices.id, senderDeviceId),
+      isNull(userDevices.revokedAt),
+    ),
+    columns: { id: true },
+  });
+  return siblings.map((d) => d.id);
+}
 
 export function registerMessagingHandlers(io: Server, socket: AuthSocket): void {
   const userId = socket.auth!.userId;
@@ -66,20 +86,13 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
   // ── send_message ───────────────────────────────────────────────────────────
   dispatcher.register('send_message', async (payload) => {
-    const {
-      conversationId,
-      messageId,
-      content,
-      contentType,
-      ciphertext,
-      envelopes,
-      fileId: payloadFileId,
-    } = payload as {
+    const { conversationId, messageId, content, contentType, ciphertext, envelopes, fileId } = payload as {
       conversationId: string;
       messageId?: string;
       content?: string;
       contentType?: string;
       ciphertext?: string;
+      ciphertextSha256?: string;
       envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
       fileId?: string;
     };
@@ -143,6 +156,21 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     if (existing) {
       socket.emit('message_ack', { messageId, sequenceNumber: existing.sequenceNumber });
       return;
+    }
+
+    // Enforce full sibling-device coverage (#188).
+    const siblingIds = await fetchSiblingDeviceIds(userId, deviceId);
+    if (siblingIds.length > 0) {
+      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
+      const missing = siblingIds.filter((id) => !providedIds.has(id));
+      if (missing.length > 0) {
+        socket.emit('error', {
+          event: 'device_set_mismatch',
+          message: `Missing envelopes for ${missing.length} sibling device(s)`,
+          missingDeviceIds: missing,
+        });
+        return;
+      }
     }
 
     let fileId: string | undefined = payloadFileId;
@@ -275,6 +303,29 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
+      // Verify ciphertext integrity when a sha256 is provided.
+      if (ciphertextSha256 && ciphertext) {
+        const computed = createHash('sha256').update(ciphertext, 'utf8').digest('hex');
+        if (computed !== ciphertextSha256) {
+          socket.emit('error', {
+            event: 'integrity_error',
+            message: 'Ciphertext sha256 mismatch',
+          });
+          return;
+        }
+      }
+
+      const [message] = await db
+        .insert(messages)
+        .values({
+          id: messageId,
+          conversationId,
+          senderId: userId,
+          senderDeviceId: deviceId,
+          contentType: contentType || 'text/plain',
+          ciphertext: effectiveCiphertext,
+        })
+        .returning();
     const original = await db.query.messages.findFirst({
       where: eq(messages.id, originalMessageId),
     });
@@ -490,13 +541,37 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       if (message) {
         io.to(conversationId).emit('new_message', message);
 
-        const members = await db.query.conversationMembers.findMany({
-          where: eq(conversationMembers.conversationId, conversationId),
-          columns: { userId: true },
+      // Emit a file_message event for file-type content so recipients
+      // know to fetch file bytes via GET /files/:id over HTTP.
+      const ct = contentType || 'text/plain';
+      if (
+        ct.startsWith('file/') ||
+        ct === 'file' ||
+        ct.startsWith('image/') ||
+        ct.startsWith('video/') ||
+        ct.startsWith('audio/')
+      ) {
+        io.to(conversationId).emit('file_message', {
+          messageId,
+          conversationId,
+          fileId: messageId,
         });
-
-        await invalidateConversationCaches(members.map((member) => member.userId));
       }
+
+      const members = await db.query.conversationMembers.findMany({
+        where: eq(conversationMembers.conversationId, conversationId),
+        columns: { userId: true },
+      });
+
+      await invalidateConversationCaches(members.map((member) => member.userId));
+
+      // Dispatch push notifications to offline members who
+      // haven't muted the conversation and have push enabled.
+      sendPushForMessage({
+        conversationId,
+        messageId,
+        senderId: userId,
+      });
     },
   );
 
